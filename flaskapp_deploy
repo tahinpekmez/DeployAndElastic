@@ -1,0 +1,142 @@
+Task 1 ve 2
+
+1- Hali hazırda yüksek lisans yaptığımdan ötürü elimde bulunan outlook hesabıyla Azure üzerinde free acount açtım. Bu free hesabınada Azure tarafından 300$ yüklenildi.
+2- D2 modelinde( 2core cpu, 8gb ram), işletim sistemi olarak Ubuntu 18.04 versiyonunda sunucu açtım.
+3- Flask de basit bir "Hello World" uygulaması yazdım;
+
+from flask import Flask
+app = Flask(__name__)
+
+@app.route('/')
+def hello():
+    return "Hello World!"
+
+if __name__ == '__main__':
+    app.run(host= '0.0.0.0')
+
+4- Dışardan erişilebilmesi için host parametresi içerisinde 0.0.0.0 geçildi. Ulaşılabilecek link -> 
+http://40.115.13.179:5000/ (İlgili ip değişebilir. Ulaşamadığınız noktada iletmeniz ricasıyla.)
+
+5- Bu uygulamanın circusd ile birlikte çalışabilmesi için sırasıyla;
+
+apt-get update
+apt-get install circus
+pip install circus-web
+
+Komutları çalıştırılarak circusd kurulmuştur.
+systemctl status circusd.service ile servis'in status durumu gözlenilebilir.
+Kurulumun ardından flask uygulamasının circusd ile koşturulabilmesi için bir takım konfigürasyonlar yapılmalıdır. Bu konfigürürasyonlar /etc/circus/conf.d dosyası içerisine yapılabilir. Ben flask uygulaması için bu path'e flask.ini dosyası oluşturdum içeriği de aşağıda ki gibidir;
+
+[circus]
+check_delay = 5
+endpoint = tcp://127.0.0.1:5555
+pubsub_endpoint = tcp://127.0.0.1:5556
+stats_endpoint = tcp://127.0.0.1:5557
+httpd = True
+debug = True
+httpd_port = 8080
+
+[watcher:swiss]
+cmd =python /opt/flask-hellworld/app.py
+warmup_delay = 0
+numprocesses = 1
+singleton = True
+stdout_stream.class = StdoutStream
+stderr_stream.class = StdoutStream
+
+Bu config ilgili path'e koyulduktan sonra "systemctl restart circusd.service"  ile restart edildi. Ve flask web uygulamasının da böyle ayağa kalktığı görülmektedir.
+
+6- Graylog kurulum aşamaları aşağıdaki gibidir;
+$ sudo apt-get update && sudo apt-get upgrade
+$ sudo apt-get install apt-transport-https openjdk-8-jre-headless uuid-runtime pwgen
+
+Graylog'un çalışması için gerekli olan component'lerden mongodb kurulumu aşağıda ki gibidir;
+$ sudo apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv 9DA31620334BD75D9DCB49F368818C72E52529D4
+$ echo "deb [ arch=amd64 ] https://repo.mongodb.org/apt/ubuntu bionic/mongodb-org/4.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-4.0.list
+$ sudo apt-get update
+$ sudo apt-get install -y mongodb-org
+$ sudo systemctl daemon-reload
+$ sudo systemctl enable mongod.service
+$ sudo systemctl restart mongod.service
+$ sudo systemctl --type=service --state=active | grep mongod
+
+Graylog'un çalışması için gerekli elasticsearch kurulumu aşağıdaki gibidir;
+$ wget -q https://artifacts.elastic.co/GPG-KEY-elasticsearch -O myKey
+$ sudo apt-key add myKey
+$ echo "deb https://artifacts.elastic.co/packages/oss-6.x/apt stable main" | sudo tee -a /etc/apt/sources.list.d/elastic-6.x.list
+$ sudo apt-get update && sudo apt-get install elasticsearch-oss
+$ sudo systemctl daemon-reload
+$ sudo systemctl enable elasticsearch.service
+$ sudo systemctl restart elasticsearch.service
+$ sudo systemctl --type=service --state=active | grep elasticsearch
+
+Elasticsearch kurulumu tamamlandıktan sonra, elasticsearch config path'ine gidilerek elasticsearch.yml editlenir ve cluster kısmına graylog yazılır.
+Graylog kurulumu aşağıda ki gibidir;
+$ wget https://packages.graylog2.org/repo/packages/graylog-3.2-repository_latest.deb
+$ sudo dpkg -i graylog-3.2-repository_latest.deb
+$ sudo apt-get update && sudo apt-get install graylog-server graylog-enterprise-plugins graylog-integrations-plugins graylog-enterprise-integrations-plugins
+
+Bir şifre belirlenir ve bu şifrenin encoded hali graylog config dosyasının içerisine koyulur.
+$ echo -n "Enter Password: " && head -1 </dev/stdin | tr -d '\n' | sha256sum | cut -d" " -f1
+
+Daha sonrasında graylog servisi başlatılır.
+$ sudo systemctl daemon-reload
+$ sudo systemctl enable graylog-server.service
+$ sudo systemctl start graylog-server.service
+$ sudo systemctl --type=service --state=active | grep graylog
+
+Graylog'a real ip ile ulaşılabilmesi için graylog.conf'a çeşitli konfigürasyonlar girilmiştir.
+http_bind_address = 0.0.0.0:9000
+http_publish_uri = http://40.115.13.179:9000/
+
+Türkiye timezone kullanılabilmesi için aşağıdaki konfigürasyon girilmiştir.
+root_timezone = Europe/Istanbul
+
+Girdiğimiz admin password'un encoded biçiminde graylog.conf dosyasına girilmesi gerekmektedir.
+password_secret = b24b91708383f5cafebf5bc592169cba3083efee44adefc2933dac3a10330da7
+root_password_sha2 = b24b91708383f5cafebf5bc592169cba3083efee44adefc2933dac3a10330da7
+
+
+Graylog adresi : http://40.115.13.179:9000/. (username: admin, pw: mersoy)
+Fakat logstash ile bağlantıyı sağlayamadım.
+
+Task 3
+
+Root ve super user da çalıştırılan komutların loglanması için sırasıyla adımlar;
+1-    Loglanılacak dosya klasörü oluşturulur.
+mkdir -p /var/log/sudo_historylogs/
+
+2-    /root/.bashrc editlenerek içerisine aşağıda ki komutlar eklenilir;
+export HISTSIZE=10000
+export HISTTIMEFORMAT='%F %T '
+export HISTFILE=/var/log/sudo_historylogs/history-sudo-$(who am i | awk '{print $1}';exit)-$(date +%F)
+export PROMPT_COMMAND='history -a'
+
+3-  Bu yapılan ayarların aktif edilebilmesi için aşağıda ki komut çalıştırılır;
+source /root/.bashrc
+
+Diğer user'ların komutlarının çalıştırılabilmesi için;
+1-    Loglanılacak dosya klasörü oluşturulur.
+mkdir -p /var/log/users_historylogs/
+
+2-    Dosyaya ilgili yetki verilir.
+chmod +t  /var/log/users_historylogs/
+
+3-    /etc/profile.d/history_log.sh  dosyasının içerisine aşağıda ki script koyulur.
+_who_am_i=$(who am i|awk '{print $1}')
+_ID=$(id -u $_who_am_i)
+if [ "$_ID" > 0 ]
+then
+export HISTSIZE=10000
+export HISTTIMEFORMAT='%F %T '
+export HISTFILE=/var/log/users_historylogs/history-users-$(who am i | awk '{print $1}';exit)-$(date +%F)
+export PROMPT_COMMAND='history -a'
+fi
+
+4-  Bu script'in çalıştırılabilmesi için yetki verilir.
+chmod 770 /etc/profile.d/history_log.sh
+
+5-  Script'in aktif edilebilmesi için;
+source /etc/profile.d/history_log.sh
+
+Özet olarak kullanıcıların çalıştırdıkları komutlar ayrı ayrı klasörler (/var/log/sudo_historylogs/ ve /var/log/user_historylogs/) de loglanılmaktadır.
